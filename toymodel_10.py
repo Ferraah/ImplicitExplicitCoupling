@@ -8,7 +8,7 @@ alpha_A, alpha_B = 0.01, 0.01
 beta = 0.01  # nonlinearity factor
 dx = L_A / (Nx_A - 1)
 dt = 0.4 * dx**2 / max(alpha_A, alpha_B)
-Tmax = 40000
+Tmax = 10000
 Nt = int(Tmax / dt)
 
 # Snapshots
