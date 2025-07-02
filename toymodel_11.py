@@ -1,34 +1,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
+# Removed unused import
 
 # Physical and numerical parameters
 L_A, L_B = 1.0, 1.0
 Nx_A, Nx_B = 50, 50
-alpha_A, alpha_B = 0.01, 0.01
-beta = 0.1  # nonlinearity factor
+# alpha_A, alpha_B = 1.16e-4, 2.2e-5
+alpha_A, alpha_B = 1.16e-4, 1.16e-4  # Same thermal diffusivity for both models
+beta = 0 # nonlinearity factor
 dx = L_A / (Nx_A - 1)
 dt = 0.4 * dx**2 / max(alpha_A, alpha_B)
-Tmax = 100
-Nt = int(Tmax / dt)
 
 # Snapshots
 num_snapshots = 10
-snapshot_interval = Nt // (num_snapshots - 1)
-
-# Initial conditions: piecewise linear
-T_A = np.linspace(20.0, 20.0, Nx_A)
-T_B = np.linspace(10.0, 10.0, Nx_B)
-EXACT_SOLUTION = 15.0  # Exact solution for testing
-# Storage
-history = []
-
-def l2_error(T1, T2):
-    """Compute L2 error between two temperature profiles."""
-    return np.sqrt(np.sum((T1 - T2)**2) / len(T1))
 
 
-# Classic heat equation update (explicit, Neumann BCs)
+
 def update_heat_explicit(T, alpha, dx, dt, n):
     T_new = T.copy()
     for i in range(1, len(T) - 1):
@@ -40,89 +27,164 @@ def update_heat_explicit(T, alpha, dx, dt, n):
     T_new += beta * dt * np.exp(-n*dt)
     return T_new
 
-# Fixed-point iteration parameters
-n_solves = 0
-max_iter = 100
-tol = 1e-6
-iter_conv = -1
-cpl_frequency = 100  # Frequency of coupling iterations
-# Time stepping loop
-for n in range(0, Nt):
+# Solve heat equation on the whole domain directly 
+def monolithic_coupling(Nt):
+    # Initial conditions: piecewise linear
+    T_A = np.linspace(20.0, 20.0, Nx_A)
+    T_B = np.linspace(10.0, 10.0, Nx_B)
+    
+    T_full = np.hstack((T_A, T_B))
+    # Storage
+    snapshots_history = []
+    full_history = []      
 
-    if n % cpl_frequency == 0:
-        T_A_lag = T_A.copy()
-        T_B_lag = T_B.copy()
+    n_iter = 0
+    # Time stepping loop
+    for n in range(0, Nt):
 
-    # Save snapshot
-    if n % snapshot_interval == 0:
-        history.append(np.concatenate((T_A, T_B)))
+        full_history.append(T_full)
+
+        # Save snapshot
+        if n % (Nt // (num_snapshots - 1)) == 0:
+            snapshots_history.append(T_full.copy())
+        
+        T_full = update_heat_explicit(T_full, alpha_A, dx, dt, n)
+        n_iter += 1
+
+    print("Timesteps number: ", Nt)
+    print("Total model runs: ", n_iter)
+
+    # Plot all snapshots
+    plt.figure(figsize=(10, 6))
+    for i, snapshot in enumerate(snapshots_history):
+        plt.plot(snapshot, label=f"Snapshot {i}")
+    plt.xlabel("Spatial Index")
+    plt.ylabel("Temperature")
+    plt.title("Temperature Evolution Over Time")
+    plt.legend()
+    plt.grid()
+    plt.savefig("output_monolithic.png")
+
+    return full_history 
+
+             
+def implicit_coupling(Nt, cpl_frequency, max_iter, tol):
+    # Fixed-point iteration parameters
+    n_solves = 0
+
+    snapshot_interval = Nt // (num_snapshots - 1)
+
+    # Initial conditions: piecewise linear
+    T_A = np.linspace(20.0, 20.0, Nx_A)
+    T_B = np.linspace(10.0, 10.0, Nx_B)
+
+    snapshots_history = []
+    full_history = []      
+
+    # Time stepping loop
+    for n in range(0, Nt):
+
+        full_history.append(np.hstack((T_A, T_B)))        
+
+        if n % cpl_frequency == 0:
+            T_A_lag = T_A.copy()
+            T_B_lag = T_B.copy()
+        # Else, use the ones retrieved at a previous coupling time
+
+        # Save snapshot
+        if n % snapshot_interval == 0:
+            snapshots_history.append(np.concatenate((T_A, T_B)))
+
+        T_if = 0.5 * (T_A_lag[-1] + T_B_lag[0])
+
+        T_A_old = T_A.copy()
+        T_B_old = T_B.copy()
+
+        T_A_old[-1] = T_if 
+        T_B_old[0] = T_if
+
+        for iter_count in range(1, max_iter + 1):
+
+            # Both models calculate in the same way temperature at the interface
+            # using the avalable data from the other side
+
+            # Calculate new state  after interface update
+            T_A_check = update_heat_explicit(T_A_old, alpha_A, dx, dt, n)
+            T_B_check = update_heat_explicit(T_B_old, alpha_B, dx, dt, n)
+            n_solves += 1
+
+            # Check dicrepancy at interface 
+            err_a = np.sum(np.abs(T_A_check - T_A_old))
+            err_b = np.sum(np.abs(T_B_check - T_B_old))
+
+            if err_a < tol and err_b < tol:
+                print(f"Converged after {iter_count} iterations at timestep {n}")
+                break 
+        
+            T_A_old = T_A_check.copy()
+            T_B_old = T_B_check.copy()
+
+            T_if = 0.5 * (T_A_check[-1] + T_B_check[0])
+            
+            T_A_old[-1] = T_if 
+            T_B_old[0] = T_if
 
 
-    T_A_guess = T_A_lag.copy()
-    T_B_guess = T_B_lag.copy()
 
-    for iter_count in range(1, max_iter + 1):
+        T_A = T_A_check.copy()
+        T_B = T_B_check.copy()
 
-        # Interface
-        T_if = 0.5 * (T_A_guess[-1] + T_B_guess[0])
+    snapshots_history.append(np.concatenate((T_A, T_B)))
+    print("Timesteps number: ", Nt)
+    print("Total model runs: ", n_solves)
+    # Plot all snapshots
+    plt.figure(figsize=(10, 6))
+    for i, snapshot in enumerate(snapshots_history):
+        plt.plot(snapshot, label=f"Snapshot {i}")
+    plt.xlabel("Spatial Index")
+    plt.ylabel("Temperature")
+    plt.title("Temperature Evolution Over Time")
+    plt.legend()
+    plt.grid()
+    plt.savefig("output.png")
 
-        T_A_guess[-1] = T_if
-        T_B_guess[0] = T_if
+    return full_history
 
-        T_A_guess = update_heat_explicit(T_A_guess, alpha_A, dx, dt, n)
-        T_B_guess = update_heat_explicit(T_B_guess, alpha_B, dx, dt, n)
-        n_solves += 1
-
-        err_a = np.abs(T_A_guess[-1] - T_if)
-        err_b = np.abs(T_B_guess[0] - T_if)
-
-        if err_a < tol and err_b < tol:
-            break 
-
-    global_err = l2_error(T_A_guess, EXACT_SOLUTION) + l2_error(T_B_guess, EXACT_SOLUTION)
-
-    if (global_err < tol and iter_conv == -1):
-        iter_conv = n
-        print(f"Converged at time step {n} after {n_solves} iterations with global error {global_err:.6f}")
-
-    # Print iteration info at each snapshot
-    if n_solves % snapshot_interval == 0 or n == Nt - 1:
-        print(f"Time step {n}: Fixed-point iterations = {iter_count}, global_err= {global_err:.6f}")
-
-    # Update for next step
-    T_A = T_A_guess
-    T_B = T_B_guess
-
-history.append(np.concatenate((T_A, T_B)))
+simulation_time = 1000
+Nt1 = int(simulation_time//dt)
+Nt2 = 10*Nt1
 
 
-# Plotting with interactive slider
-x_A = np.linspace(0, L_A, Nx_A)
-x_B = np.linspace(L_A, L_A + L_B, Nx_B)
-x_full = np.concatenate((x_A, x_B))
+print("Running baseline")
+baseline_impl = np.asarray(monolithic_coupling(Nt2), dtype=object)
+baseline_expl = np.asarray(monolithic_coupling(Nt2), dtype=object)
 
-fig, ax = plt.subplots(figsize=(10, 6))
-plt.subplots_adjust(bottom=0.2)
+print("\nRunning explicit")
+hist_expl = np.asarray(implicit_coupling(Nt2, 1, 1, 1e-100), dtype=object)
+print("\nRunning implicit")
+hist_impl = np.asarray(implicit_coupling(Nt1, 1, 10, 1e-100), dtype=object)
 
-line, = ax.plot(x_full, history[0], label='t=0.00')
-ax.set_xlabel("x")
-ax.set_ylabel("Temperature")
-ax.set_title("Nonlinear Explicit Coupling at Interface")
-ax.grid(True)
-legend = ax.legend()
+# Retrievve one every 10 elements of baseline_impl
+baseline_impl = baseline_impl[::10]
 
-# Slider axis
-ax_slider = plt.axes([0.2, 0.05, 0.6, 0.03])
-slider = Slider(ax_slider, 'Time', 0, len(history)-1, valinit=0, valstep=1)
+err_impl_time = np.abs(hist_impl-baseline_impl)/(Nx_A + Nx_B)
+err_impl = np.sum(err_impl_time) / Nt1
 
-def update(val):
-    idx = int(slider.val)
-    line.set_ydata(history[idx])
-    time_val = idx * snapshot_interval * dt
-    line.set_label(f't={time_val:.2f}')
-    ax.legend()
-    fig.canvas.draw_idle()
+err_expl_time = np.abs(hist_expl-baseline_expl)/(Nx_A + Nx_B)
+err_expl = np.sum(err_expl_time) / Nt2
 
-slider.on_changed(update)
-plt.show()
+print("Implicit error: ", err_impl)
+print("Explicit error: ", err_expl)
 
+
+print(err_impl_time.shape)
+# Plot in one plot errors ovver time
+plt.figure(figsize=(10, 6))
+plt.plot(err_impl_time, label="Implicit Error")
+plt.plot(err_expl_time, label="Explicit Error")
+plt.xlabel("Time Step")
+plt.ylabel("Error")
+plt.title("Error Over Time for Implicit and Explicit Methods")
+plt.legend()
+plt.grid()
+plt.savefig("error_plot.png")
