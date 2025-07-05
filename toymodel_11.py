@@ -21,6 +21,20 @@ def make_plot_1d(history, file_name):
     plt.savefig(file_name)
     plt.close()
 
+def make_error_plot(hist_monolithic, hist_expl, hist_impl):
+    plt.figure(figsize=(10, 6))
+    err_expl = np.sum(np.abs(hist_expl - hist_monolithic), axis=1)
+    err_impl = np.sum(np.abs(hist_impl - hist_monolithic), axis=1)
+    plt.plot(err_expl, label="Monolithic vs Explicit", alpha=0.7)
+    plt.plot(err_impl, label="Monolithic vs Implicit", alpha=0.7)
+    plt.xlabel("Timestep")
+    plt.ylabel("Absolute Error")
+    plt.title("Error Comparison")
+    plt.legend()
+    plt.grid()
+    plt.savefig("error_comparison.png")
+    plt.close()
+    
 def make_plot(full_history, num_snapshots, file_name):
     plt.figure(figsize=(10, 6))
     step = max(1, len(full_history)//num_snapshots)
@@ -35,8 +49,8 @@ def make_plot(full_history, num_snapshots, file_name):
     plt.close()
 
 def initial_conditions():
-    T_A = np.linspace(10.0, 20.0, Nx_A)
-    T_B = np.linspace(10.0, 20.0, Nx_B)
+    T_A = np.linspace(20.0, 20.0, Nx_A)
+    T_B = np.linspace(10.0, 10.0, Nx_B)
     return T_A, T_B
 
 # =========================
@@ -61,7 +75,6 @@ def monolithic_coupling(Nt):
         full_history.append(T_full.copy())
     print("Timesteps number:", Nt)
     print("Total model runs:", Nt)
-    make_plot(full_history, 5, "output_monolithic.png")
     return full_history
 
 def explicit_coupling(Nt, n_cpl):
@@ -83,7 +96,6 @@ def explicit_coupling(Nt, n_cpl):
 
     print("Timesteps number:", Nt)
     print("Total model runs:", models_run)
-    make_plot(full_history, 5, "output_explicit.png")
     return full_history
 
 def implicit_coupling(Nt, n_cpl, max_iter):
@@ -99,13 +111,14 @@ def implicit_coupling(Nt, n_cpl, max_iter):
         T_A_save = T_A.copy()
         T_B_save = T_B.copy()
 
+        T_if = 0.5 * (T_A_save[-1] + T_A_save[0])
+        
         for k_swrz in range(max_iter):
 
             T_A_prev = T_A_save.copy()
             T_B_prev = T_B_save.copy()
-
+            
             # Apply interface conditions given the previous state
-            T_if = 0.5 * (T_A_prev[-1] + T_A_prev[0])
             T_A_prev[-1] = T_if
             T_B_prev[0] = T_if
 
@@ -118,11 +131,12 @@ def implicit_coupling(Nt, n_cpl, max_iter):
                 T_B_prev = T_B.copy()
                 #print(f"Schwarz iteration {k_swrz}, step {ts}, error: {err:.6f}")
 
+            T_if = 0.5 * (T_A_prev[-1] + T_A_prev[0])
+
         full_history.append(np.hstack((T_A, T_B)))
 
     print("Timesteps number:", Nt)
     print("Total model runs:", models_run)
-    make_plot(full_history, 5, "output_schwarz.png")
     return full_history
 
 # =========================
@@ -136,17 +150,22 @@ def main():
 
     print("Running baseline")
     baseline = np.asarray(monolithic_coupling(Nt), dtype=object)
+    make_plot(baseline[::cpl_frequency], 5, "output_monolithic.png")
 
     print("\nRunning implicit")
     hist_impl = np.asarray(implicit_coupling(Nt, cpl_frequency, 10), dtype=object)
+    make_plot(hist_impl, 5, "output_schwarz.png")
 
     print("\nRunning explicit")
     hist_expl = np.asarray(explicit_coupling(Nt, cpl_frequency), dtype=object)
+    make_plot(hist_expl[::cpl_frequency], 5, "output_explicit.png")
 
     print("\nhist_impl shape:", hist_impl.shape)
     print("hist_expl shape:", hist_expl.shape)
-    err_impl = np.sum(np.abs(hist_impl - baseline[::cpl_frequency])) / (Nt/cpl_frequency * (Nx_A + Nx_B))
-    err_expl = np.sum(np.abs(hist_expl - baseline[::cpl_frequency])) / (Nt/cpl_frequency * (Nx_A + Nx_B))
+    # err_impl = np.sum(np.abs(hist_impl - baseline[::cpl_frequency])) / (Nt/cpl_frequency * (Nx_A + Nx_B))
+    # err_expl = np.sum(np.abs(hist_expl - baseline[::cpl_frequency])) / (Nt/cpl_frequency * (Nx_A + Nx_B))
+
+    make_error_plot(baseline[::cpl_frequency], hist_expl[::cpl_frequency], hist_impl)
     # print(f"Implicit error: {err_impl:.4f}")
     # print(f"Explicit error: {err_expl:.4f}")
 
